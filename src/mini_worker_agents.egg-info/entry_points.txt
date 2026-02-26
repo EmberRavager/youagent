@@ -1,0 +1,3 @@
+[console_scripts]
+mini-worker = mini_worker.cli:main
+youagent = mini_worker.cli:main

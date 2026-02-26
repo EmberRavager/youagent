@@ -1,0 +1,7 @@
+.env
+.venv/
+.mini_worker/
+__pycache__/
+*.pyc
+.ruff_cache/
+~/
