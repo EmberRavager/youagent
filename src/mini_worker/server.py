@@ -1,3 +1,5 @@
+import cgi
+import io
 import json
 import threading
 import time
@@ -154,15 +156,16 @@ HTML_PAGE = r"""<!doctype html>
       gap: 8px;
       align-items: end;
     }
+    .btn-group { display: flex; gap: 6px; align-items: center; }
     textarea {
       width: 100%;
-      min-height: 52px;
-      max-height: 220px;
+      min-height: 48px;
+      max-height: 200px;
       resize: vertical;
       border: 1px solid #d5dde8;
-      border-radius: 14px;
-      padding: 13px 14px;
-      font-size: 15px;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
       font-family: inherit;
       line-height: 1.5;
       outline: none;
@@ -172,7 +175,44 @@ HTML_PAGE = r"""<!doctype html>
       border-color: #9fb0c6;
       box-shadow: 0 0 0 3px rgba(100,116,139,0.16);
     }
-    .send { height: 52px; padding: 0 18px; border-radius: 12px; }
+    .send { height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; }
+    .file-btn { width: 36px; height: 36px; }
+
+    .file-area {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .file-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #eef2ff;
+      border: 1px solid #dbeafe;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: #1e40af;
+    }
+    .file-item .remove {
+      cursor: pointer;
+      color: #6366f1;
+      font-weight: bold;
+    }
+    #fileInput { display: none; }
+    .file-btn {
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: #fff;
+      font-size: 18px;
+    }
 
     .typing { display: inline-flex; align-items: center; gap: 4px; height: 18px; }
     .typing i {
@@ -186,6 +226,43 @@ HTML_PAGE = r"""<!doctype html>
       40% { opacity: 1; transform: translateY(-2px); }
     }
 
+    .tool-call {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin: 4px 0;
+      font-size: 13px;
+      color: #166534;
+    }
+    .tool-call .tool-name {
+      font-weight: 600;
+      color: #15803d;
+    }
+    .tool-call .tool-time {
+      color: #86efac;
+      font-size: 11px;
+      margin-left: 8px;
+    }
+    .tool-call.running {
+      background: #fefce8;
+      border-color: #fef08a;
+      color: #a16207;
+    }
+    .tool-call.running .tool-name { color: #ca8a04; }
+    .tool-call.error {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #b91c1c;
+    }
+    .tool-call.error .tool-name { color: #dc2626; }
+
+    .tool-status {
+      font-size: 12px;
+      color: #64748b;
+      padding: 4px 0;
+    }
+
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
       .sidebar { border-right: 0; border-bottom: 1px solid #d7dee7; }
@@ -197,11 +274,11 @@ HTML_PAGE = r"""<!doctype html>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">YouAgent</div>
-      <div class="subtle">ChatGPT-like conversation layout</div>
+      <div class="subtle">类似 ChatGPT 的对话布局</div>
 
       <div class="panel">
         <div>
-          <label for="session">Session</label>
+          <label for="session">会话</label>
           <input id="session" placeholder="default" value="default" />
         </div>
         <div>
@@ -212,8 +289,8 @@ HTML_PAGE = r"""<!doctype html>
           </select>
         </div>
         <div class="btn-row">
-          <button id="switchBtn" class="btn-ghost">Apply Agent</button>
-          <button id="clearBtn" class="btn-ghost">Clear Chat</button>
+          <button id="switchBtn" class="btn-ghost">切换 Agent</button>
+          <button id="clearBtn" class="btn-ghost">清空聊天</button>
         </div>
       </div>
 
@@ -223,44 +300,50 @@ HTML_PAGE = r"""<!doctype html>
           <select id="provider"></select>
         </div>
         <div>
-          <label for="model">Model</label>
-          <input id="model" placeholder="gpt-4.1-mini" />
+          <label for="model">模型</label>
+          <input id="model" placeholder="MiniMax-M2.5" />
         </div>
         <div>
           <label for="baseUrl">Base URL</label>
           <input id="baseUrl" placeholder="https://..." />
         </div>
         <div>
-          <label for="apiKey">API Key (optional)</label>
-          <input id="apiKey" type="password" placeholder="leave empty to use env/config" />
+          <label for="apiKey">API Key（可选）</label>
+          <input id="apiKey" type="password" placeholder="留空则使用环境变量/配置" />
         </div>
-        <button id="saveConfigBtn" class="btn-primary">Save Model Config</button>
+        <button id="saveConfigBtn" class="btn-primary">保存模型配置</button>
       </div>
 
       <div class="panel">
-        <a class="link" href="/tasks.html" target="_blank">Open Task Dashboard</a>
+        <a class="link" href="/tasks.html" target="_blank">打开任务面板</a>
       </div>
     </aside>
 
     <main class="main">
       <header class="header">
-        <div class="title">Chat</div>
-        <div id="meta" class="meta">Loading configuration...</div>
+        <div class="title">对话</div>
+        <div id="meta" class="meta">正在加载配置...</div>
       </header>
 
       <section id="messages" class="chat">
         <div class="msg-wrap">
           <div class="row assistant">
-            <div class="bubble">Ready. Ask me to inspect files, run tools, or execute tasks.</div>
+            <div class="bubble">已就绪。请告诉我需要检查文件、运行工具或执行任务。</div>
           </div>
         </div>
       </section>
 
       <footer class="composer">
+        <div class="file-area" id="fileArea"></div>
         <div class="composer-inner">
-          <textarea id="input" placeholder="Send a message... (Enter to send, Shift+Enter for newline)"></textarea>
-          <button id="sendBtn" class="btn-primary send">Send</button>
+          <textarea id="input" placeholder="发送消息...（Enter 发送，Shift+Enter 换行）"></textarea>
+          <div class="btn-group">
+            <button id="stopBtn" class="btn-ghost send" style="display:none;background:#fef2f2;border-color:#fecaca;color:#dc2626;">停止</button>
+            <button id="fileBtn" class="btn-ghost file-btn" title="上传文件">📎</button>
+            <button id="sendBtn" class="btn-primary send">发送</button>
+          </div>
         </div>
+        <input type="file" id="fileInput" multiple style="display: none;" />
       </footer>
     </main>
   </div>
@@ -269,6 +352,7 @@ HTML_PAGE = r"""<!doctype html>
     const messages = document.getElementById("messages");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("sendBtn");
+    const stopBtn = document.getElementById("stopBtn");
     const switchBtn = document.getElementById("switchBtn");
     const clearBtn = document.getElementById("clearBtn");
     const agent = document.getElementById("agent");
@@ -279,6 +363,15 @@ HTML_PAGE = r"""<!doctype html>
     const baseUrl = document.getElementById("baseUrl");
     const apiKey = document.getElementById("apiKey");
     const saveConfigBtn = document.getElementById("saveConfigBtn");
+    const fileInput = document.getElementById("fileInput");
+    const fileBtn = document.getElementById("fileBtn");
+    const fileArea = document.getElementById("fileArea");
+    
+    let uploadedFiles = [];
+    let toolStartTime = {};
+    let toolStatusEl = null;
+    let currentSession = "default";
+    let isStreaming = false;
 
     function cleanReply(text) {
       return String(text || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
@@ -371,24 +464,31 @@ HTML_PAGE = r"""<!doctype html>
 
     async function sendMessage() {
       const text = input.value.trim();
-      if (!text) return;
-      appendBubble("user", text);
+      if (!text && uploadedFiles.length === 0) return;
+      
+      currentSession = session.value.trim() || "default";
+      const formData = new FormData();
+      if (text) formData.append("message", text);
+      formData.append("session", currentSession);
+      formData.append("agent", agent.value);
+      uploadedFiles.forEach(f => formData.append("files", f));
+      
+      appendBubble("user", text || `[上传了 ${uploadedFiles.length} 个文件]`);
       input.value = "";
-      sendBtn.disabled = true;
+      fileArea.innerHTML = "";
+      uploadedFiles = [];
+      sendBtn.style.display = "none";
+      stopBtn.style.display = "block";
+      isStreaming = true;
       const loadingNode = appendTyping();
 
       try {
         const resp = await fetch("/api/chat_stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: text,
-            session: session.value.trim() || "default",
-            agent: agent.value,
-          }),
+          body: formData,
         });
         if (!resp.ok || !resp.body) {
-          loadingNode.textContent = `Request failed (${resp.status})`;
+          loadingNode.textContent = `请求失败 (${resp.status})`;
           return;
         }
 
@@ -407,8 +507,31 @@ HTML_PAGE = r"""<!doctype html>
             if (!line) continue;
             const data = JSON.parse(line.slice(5).trim());
             if (data.type === "error") {
-              loadingNode.textContent = `Error: ${data.error || "request failed"}`;
+              loadingNode.textContent = `错误: ${data.error || "请求失败"}`;
               return;
+            }
+            if (data.type === "aborted") {
+              loadingNode.textContent = (loadingNode.textContent || "") + " [已终止]";
+              loadingNode.textContent = cleanReply(loadingNode.textContent);
+              return;
+            }
+            if (data.type === "tool_start") {
+              toolStartTime[data.tool_name] = Date.now();
+              const toolEl = document.createElement("div");
+              toolEl.className = "tool-call running";
+              toolEl.id = "tool_" + data.tool_name + "_" + data.tool_index;
+              toolEl.innerHTML = `<span class="tool-name">🔧 正在调用工具: ${data.tool_name}</span><span class="tool-time">...</span>`;
+              loadingNode.parentElement.parentElement.insertBefore(toolEl, loadingNode);
+              messages.scrollTop = messages.scrollHeight;
+            }
+            if (data.type === "tool_end") {
+              const elapsed = data.elapsed !== undefined ? data.elapsed.toFixed(2) : ((Date.now() - (toolStartTime[data.tool_name] || Date.now())) / 1000).toFixed(2);
+              const toolEl = document.getElementById("tool_" + data.tool_name + "_" + data.tool_index);
+              if (toolEl) {
+                toolEl.className = "tool-call" + (data.ok ? "" : " error");
+                toolEl.innerHTML = `<span class="tool-name">🔧 工具: ${data.tool_name}</span><span class="tool-time">${elapsed}秒</span> ${data.ok ? "✓" : "✗"}`;
+              }
+              messages.scrollTop = messages.scrollHeight;
             }
             if (data.type === "delta") {
               if (!started) {
@@ -424,14 +547,56 @@ HTML_PAGE = r"""<!doctype html>
           }
         }
         if (!started) {
-          loadingNode.textContent = "No output from model.";
+          loadingNode.textContent = "模型无输出。";
         }
       } catch (err) {
-        loadingNode.textContent = `Network error: ${String(err)}`;
+        loadingNode.textContent = `网络错误: ${String(err)}`;
       } finally {
-        sendBtn.disabled = false;
+        sendBtn.style.display = "block";
+        stopBtn.style.display = "none";
+        isStreaming = false;
         input.focus();
       }
+    }
+
+    stopBtn.addEventListener("click", async () => {
+      if (!isStreaming) return;
+      try {
+        await fetch("/api/chat_abort", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({session: currentSession}),
+        });
+      } catch (err) {
+        console.error("abort failed:", err);
+      }
+    });
+
+    fileBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      Array.from(fileInput.files).forEach(f => {
+        uploadedFiles.push(f);
+        const item = document.createElement("span");
+        item.className = "file-item";
+        item.innerHTML = `${f.name} <span class="remove" onclick="removeFile('${f.name}')">×</span>`;
+        fileArea.appendChild(item);
+      });
+      fileInput.value = "";
+    });
+    
+    window.removeFile = function(name) {
+      uploadedFiles = uploadedFiles.filter(f => f.name !== name);
+      renderFiles();
+    };
+    
+    function renderFiles() {
+      fileArea.innerHTML = "";
+      uploadedFiles.forEach(f => {
+        const item = document.createElement("span");
+        item.className = "file-item";
+        item.innerHTML = `${f.name} <span class="remove" onclick="removeFile('${f.name}')">×</span>`;
+        fileArea.appendChild(item);
+      });
     }
 
     switchBtn.addEventListener("click", () => {
@@ -461,11 +626,11 @@ HTML_PAGE = r"""<!doctype html>
 
 
 TASKS_PAGE = r"""<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouAgent Task Dashboard</title>
+  <title>YouAgent 任务面板</title>
   <style>
     body { margin: 0; padding: 20px; font-family: Segoe UI, sans-serif; background: #f5f7fb; color: #0f172a; }
     .grid { display: grid; gap: 12px; }
@@ -483,17 +648,17 @@ TASKS_PAGE = r"""<!doctype html>
 <body>
   <div class="grid">
     <div class="card">
-      <div class="title">Task Dashboard</div>
-      <div class="meta">Auto refresh every 3s</div>
-      <div id="metrics" class="meta">loading metrics...</div>
+      <div class="title">任务面板</div>
+      <div class="meta">每 3 秒自动刷新</div>
+      <div id="metrics" class="meta">加载中...</div>
     </div>
     <div class="card">
-      <div class="title">Scheduled Tasks</div>
-      <div id="tasks">loading...</div>
+      <div class="title">定时任务</div>
+      <div id="tasks">加载中...</div>
     </div>
     <div class="card">
-      <div class="title">Recent Events</div>
-      <div id="events">loading...</div>
+      <div class="title">最近事件</div>
+      <div id="events">加载中...</div>
     </div>
   </div>
   <script>
@@ -518,18 +683,18 @@ TASKS_PAGE = r"""<!doctype html>
       const tasks = await tasksResp.json();
       const metrics = await metricsResp.json();
       const events = await eventsResp.json();
-      metricsEl.textContent = `metrics: ${JSON.stringify((metrics && metrics.counters) || {})}`;
+      metricsEl.textContent = `指标: ${JSON.stringify((metrics && metrics.counters) || {})}`;
       const rows = (tasks.tasks || []).map((t) => `
         <div class="row">
           <div><strong>${t.name}</strong> <span class="status ${statusClass(t.status)}">[${t.status}]</span></div>
           <div class="meta">id=<code>${t.id}</code> step=${t.step_index}/${t.step_total} next=${fmtTs(t.next_run_at)} every=${t.interval_seconds}s</div>
-          <div class="meta">last_run=${fmtTs(t.last_run_at)} runs=${t.runs}</div>
-          <div class="meta">${t.last_error ? ('error=' + t.last_error) : (t.last_reply ? ('reply=' + t.last_reply.slice(0, 220)) : '')}</div>
+          <div class="meta">上次运行=${fmtTs(t.last_run_at)} 运行次数=${t.runs}</div>
+          <div class="meta">${t.last_error ? ('error=' + t.last_error) : (t.last_reply ? ('回复=' + t.last_reply.slice(0, 220)) : '')}</div>
         </div>
       `).join('');
-      tasksEl.innerHTML = rows || '<div class="meta">No tasks</div>';
+      tasksEl.innerHTML = rows || '<div class="meta">暂无任务</div>';
       const ers = (events.events || []).map((e) => `<div class="meta">${fmtTs(e.ts)} | ${e.event} | ${JSON.stringify(e).slice(0, 220)}</div>`).join('');
-      eventsEl.innerHTML = ers || '<div class="meta">No events</div>';
+      eventsEl.innerHTML = ers || '<div class="meta">暂无事件</div>';
     }
     load().catch((e) => { tasksEl.textContent = String(e); });
     setInterval(() => load().catch(() => {}), 3000);
@@ -566,9 +731,21 @@ class WebApp:
         self._lock = threading.Lock()
         self._scheduler_stop = threading.Event()
         self._scheduler_thread: threading.Thread | None = None
+        self._current_request: dict[str, Any] = {}
+        self._request_queue: list[dict[str, Any]] = []
+        self._processing = False
         if cfg.scheduler:
             self._scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
             self._scheduler_thread.start()
+
+    def abort(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session_id = str(payload.get("session", "default")).strip() or "default"
+        if self._current_request.get("session") == session_id:
+            self._current_request["aborted"] = True
+            if self._current_request.get("runtime"):
+                self._current_request["runtime"]._aborted = True
+            return {"ok": True, "message": "请求已终止"}
+        return {"ok": False, "error": "没有正在进行的请求"}
 
     def _runtime_for(self, session_id: str, agent_name: str) -> AgentRuntime:
         key = (session_id, agent_name)
@@ -634,7 +811,7 @@ class WebApp:
             "api_key_configured": bool(self.client.cfg.api_key),
         }
 
-    def chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def chat(self, payload: dict[str, Any], event_callback: Any = None) -> dict[str, Any]:
         message = str(payload.get("message", "")).strip()
         if not message:
             return {"ok": False, "error": "message is required"}
@@ -647,16 +824,19 @@ class WebApp:
             return {"ok": False, "error": f"unknown agent: {agent_name}"}
 
         runtime = self._runtime_for(session_id=session_id, agent_name=agent_name)
-        reply = runtime.ask(
-            message,
-            event_callback=lambda evt: self.obs.record(
+        
+        def combined_callback(evt):
+            self.obs.record(
                 "runtime_event",
                 mode="web_chat",
                 session=session_id,
                 phase=evt.get("phase"),
                 detail=evt,
-            ),
-        )
+            )
+            if event_callback:
+                event_callback(evt)
+        
+        reply = runtime.ask(message, event_callback=combined_callback)
         self.obs.record("web_chat_reply", session=session_id, chars=len(reply))
         return {"ok": True, "reply": reply, "session": session_id, "agent": agent_name}
 
@@ -845,6 +1025,7 @@ def run_web_server(cfg: ServerConfig, client: ChatClient) -> int:
             if self.path not in {
                 "/api/chat",
                 "/api/chat_stream",
+                "/api/chat_abort",
                 "/api/config",
                 "/api/tasks",
                 "/api/tasks/delete",
@@ -856,7 +1037,33 @@ def run_web_server(cfg: ServerConfig, client: ChatClient) -> int:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length) if length > 0 else b"{}"
-                payload = json.loads(body.decode("utf-8"))
+                content_type = self.headers.get("Content-Type", "")
+                
+                payload = {}
+                files = []
+                
+                if "multipart/form-data" in content_type:
+                    form = cgi.FieldStorage(
+                        fp=io.BytesIO(body),
+                        headers=self.headers,
+                        environ={
+                            'REQUEST_METHOD': 'POST',
+                            'CONTENT_TYPE': content_type,
+                        }
+                    )
+                    payload = {
+                        "message": form.getvalue("message", ""),
+                        "session": form.getvalue("session", "default"),
+                        "agent": form.getvalue("agent", "miniagent_like"),
+                    }
+                    files = []
+                    if form.file:
+                        for f in form.list or []:
+                            if f.filename:
+                                files.append((f.filename, f.file.read()))
+                else:
+                    payload = json.loads(body.decode("utf-8"))
+                
                 if self.path == "/api/config":
                     result = app.update_config(payload)
                     status = (
@@ -887,18 +1094,60 @@ def run_web_server(cfg: ServerConfig, client: ChatClient) -> int:
                     _json(self, HTTPStatus.OK, result)
                     return
 
+                if self.path == "/api/chat_abort":
+                    result = app.abort(payload)
+                    status = HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST
+                    _json(self, status, result)
+                    return
+
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "keep-alive")
                 self.end_headers()
 
+                session_id = payload.get("session", "default")
+                app._current_request = {"session": session_id, "aborted": False, "runtime": None}
+                
                 holder: dict[str, Any] = {}
                 done = threading.Event()
+                tool_start_times: dict[str, float] = {}
+
+                def event_forwarder(evt):
+                    phase = evt.get("phase", "")
+                    if phase == "tool_start":
+                        tool_start_times[evt.get("tool_name", "")] = time.time()
+                        _sse(self, {
+                            "type": "tool_start",
+                            "tool_name": evt.get("tool_name", ""),
+                            "tool_index": evt.get("tool_index", 0),
+                            "tool_total": evt.get("tool_total", 0),
+                        })
+                    elif phase == "tool_end":
+                        start_time = tool_start_times.get(evt.get("tool_name", ""))
+                        elapsed = time.time() - start_time if start_time else 0
+                        _sse(self, {
+                            "type": "tool_end",
+                            "tool_name": evt.get("tool_name", ""),
+                            "tool_index": evt.get("tool_index", 0),
+                            "ok": evt.get("ok", False),
+                            "elapsed": round(elapsed, 2),
+                        })
+                    elif phase == "llm_round_start":
+                        _sse(self, {"type": "llm_start", "round": evt.get("round", 0)})
+                    elif phase == "llm_round_end":
+                        _sse(self, {"type": "llm_end", "round": evt.get("round", 0)})
+                    elif phase == "aborted":
+                        _sse(self, {"type": "aborted"})
 
                 def worker() -> None:
                     try:
-                        holder["result"] = app.chat(payload)
+                        def chat_with_callback(p):
+                            result = app.chat(p, event_callback=event_forwarder)
+                            if app._current_request.get("runtime"):
+                                app._current_request["runtime"] = result.get("runtime")
+                            return result
+                        holder["result"] = chat_with_callback(payload)
                     except Exception as exc:  # noqa: BLE001
                         holder["error"] = str(exc)
                     finally:
@@ -908,6 +1157,9 @@ def run_web_server(cfg: ServerConfig, client: ChatClient) -> int:
 
                 tick = 0
                 while not done.is_set():
+                    if app._current_request.get("aborted"):
+                        _sse(self, {"type": "aborted"})
+                        break
                     _sse(self, {"type": "status", "state": "thinking", "tick": tick})
                     tick += 1
                     time.sleep(0.25)

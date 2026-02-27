@@ -20,6 +20,7 @@ class AgentRuntime:
         self.tools = tools
         self.memory = memory
         self.messages: list[dict[str, Any]] = self._load_messages()
+        self._aborted = False
 
     def _load_messages(self) -> list[dict[str, Any]]:
         if self.memory is None:
@@ -48,10 +49,15 @@ class AgentRuntime:
             return
 
     def ask(self, user_text: str, event_callback: Any = None) -> str:
+        self._aborted = False
         self.messages.append({"role": "user", "content": user_text})
         self._emit(event_callback, {"phase": "user_message", "text": user_text})
 
         for round_index in range(1, self.agent.max_tool_rounds + 1):
+            if self._aborted:
+                self.messages.append({"role": "assistant", "content": "已终止"})
+                self._emit(event_callback, {"phase": "aborted"})
+                return "已终止"
             self._emit(
                 event_callback,
                 {"phase": "llm_round_start", "round": round_index},
@@ -88,6 +94,10 @@ class AgentRuntime:
 
             total_tools = len(tool_calls)
             for tool_index, call in enumerate(tool_calls, start=1):
+                if self._aborted:
+                    self.messages.append({"role": "assistant", "content": "已终止"})
+                    self._emit(event_callback, {"phase": "aborted"})
+                    return "已终止"
                 name = call["function"]["name"]
                 raw_args = call["function"].get("arguments", "{}")
                 try:
