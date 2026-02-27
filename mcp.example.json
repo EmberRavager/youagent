@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "cwd": ".",
+      "startup_timeout": 15,
+      "request_timeout": 60
+    }
+  ]
+}

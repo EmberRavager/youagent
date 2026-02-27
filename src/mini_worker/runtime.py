@@ -39,18 +39,43 @@ class AgentRuntime:
         if self.memory is not None:
             self.memory.save(self.messages)
 
-    def ask(self, user_text: str) -> str:
-        self.messages.append({"role": "user", "content": user_text})
+    def _emit(self, callback: Any, payload: dict[str, Any]) -> None:
+        if callback is None:
+            return
+        try:
+            callback(payload)
+        except Exception:
+            return
 
-        for _ in range(self.agent.max_tool_rounds):
+    def ask(self, user_text: str, event_callback: Any = None) -> str:
+        self.messages.append({"role": "user", "content": user_text})
+        self._emit(event_callback, {"phase": "user_message", "text": user_text})
+
+        for round_index in range(1, self.agent.max_tool_rounds + 1):
+            self._emit(
+                event_callback,
+                {"phase": "llm_round_start", "round": round_index},
+            )
             response = self.client.chat_completion(self.messages, self.tools.schemas())
             message = response["choices"][0]["message"]
+            self._emit(
+                event_callback,
+                {"phase": "llm_round_end", "round": round_index},
+            )
 
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 assistant_text = message.get("content", "")
                 self.messages.append({"role": "assistant", "content": assistant_text})
                 self._persist()
+                self._emit(
+                    event_callback,
+                    {
+                        "phase": "assistant_final",
+                        "round": round_index,
+                        "text": assistant_text,
+                    },
+                )
                 return assistant_text
 
             self.messages.append(
@@ -61,13 +86,24 @@ class AgentRuntime:
                 }
             )
 
-            for call in tool_calls:
+            total_tools = len(tool_calls)
+            for tool_index, call in enumerate(tool_calls, start=1):
                 name = call["function"]["name"]
                 raw_args = call["function"].get("arguments", "{}")
                 try:
                     parsed_args = json.loads(raw_args)
                 except json.JSONDecodeError:
                     parsed_args = {}
+                self._emit(
+                    event_callback,
+                    {
+                        "phase": "tool_start",
+                        "round": round_index,
+                        "tool_index": tool_index,
+                        "tool_total": total_tools,
+                        "tool_name": name,
+                    },
+                )
 
                 result = self.tools.call(name, parsed_args)
                 content = json.dumps(
@@ -82,8 +118,20 @@ class AgentRuntime:
                     }
                 )
                 self._persist()
+                self._emit(
+                    event_callback,
+                    {
+                        "phase": "tool_end",
+                        "round": round_index,
+                        "tool_index": tool_index,
+                        "tool_total": total_tools,
+                        "tool_name": name,
+                        "ok": result.ok,
+                    },
+                )
 
         fallback = "Stopped after too many tool rounds. Please narrow the task."
         self.messages.append({"role": "assistant", "content": fallback})
         self._persist()
+        self._emit(event_callback, {"phase": "stopped_max_rounds"})
         return fallback

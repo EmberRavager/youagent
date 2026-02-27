@@ -18,6 +18,41 @@ PROVIDER_PRESETS = {
         "key_env": "MINIMAX_API_KEY",
         "base_env": "MINIMAX_BASE_URL",
     },
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "key_env": "DEEPSEEK_API_KEY",
+        "base_env": "DEEPSEEK_BASE_URL",
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_env": "GROQ_API_KEY",
+        "base_env": "GROQ_BASE_URL",
+    },
+    "anthropic": {
+        "base_url": "https://api.anthropic.com/v1",
+        "key_env": "ANTHROPIC_API_KEY",
+        "base_env": "ANTHROPIC_BASE_URL",
+    },
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "key_env": "GEMINI_API_KEY",
+        "base_env": "GEMINI_BASE_URL",
+    },
+    "zhipu": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "key_env": "ZHIPU_API_KEY",
+        "base_env": "ZHIPU_BASE_URL",
+    },
+    "volcengine": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "key_env": "VOLCENGINE_API_KEY",
+        "base_env": "VOLCENGINE_BASE_URL",
+    },
+    "vllm": {
+        "base_url": "http://127.0.0.1:8000/v1",
+        "key_env": "VLLM_API_KEY",
+        "base_env": "VLLM_BASE_URL",
+    },
     "custom": {
         "base_url": "https://api.openai.com/v1",
         "key_env": "OPENAI_API_KEY",
@@ -43,6 +78,10 @@ class APIConfig:
     timeout_seconds: int = 60
 
 
+def available_providers() -> list[str]:
+    return sorted(PROVIDER_PRESETS.keys())
+
+
 def resolve_api_config(
     provider: str,
     model: str,
@@ -53,7 +92,7 @@ def resolve_api_config(
     selected = provider.lower().strip()
     cleaned_model = model.strip()
     if selected not in PROVIDER_PRESETS:
-        options = ", ".join(sorted(PROVIDER_PRESETS.keys()))
+        options = ", ".join(available_providers())
         raise ValueError(f"Unknown provider '{provider}'. Available: {options}")
 
     preset = PROVIDER_PRESETS[selected]

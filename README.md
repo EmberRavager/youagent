@@ -226,3 +226,128 @@ src/mini_worker/
 ## 联系方式
 
 - 在杭州，有想招作者进去的联系邮箱：`emberravager@gmail.com`
+
+## MCP Integration
+
+You can mount MCP tools (stdio servers) with `--mcp-config`.
+
+Example `mcp.json`:
+
+```json
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "cwd": ".",
+      "startup_timeout": 15,
+      "request_timeout": 60
+    }
+  ]
+}
+```
+
+Run:
+
+```bash
+youagent chat --mcp-config ./mcp.json
+youagent serve --mcp-config ./mcp.json
+youagent heartbeat --mcp-config ./mcp.json --message "scan repo and summarize TODOs" --every 300 --count 1
+```
+
+Persist defaults:
+
+```bash
+youagent config --mcp-config ./mcp.json
+youagent status
+```
+
+## Scheduler, Progress, Observability, Security, Playwright
+
+### Scheduled tasks
+
+Add task:
+
+```bash
+youagent tasks add \
+  --name daily_report \
+  --prompt "Check repo status and summarize TODOs" \
+  --every 600 \
+  --provider openai \
+  --model gpt-4.1-mini
+```
+
+List/Delete:
+
+```bash
+youagent tasks list
+youagent tasks delete --id <task_id>
+```
+
+Run due tasks once / start loop:
+
+```bash
+youagent tasks run
+youagent tasks start --poll 5
+```
+
+### Task progress visualization
+
+- Web dashboard: `http://127.0.0.1:7788/tasks.html`
+- APIs:
+  - `GET /api/tasks`
+  - `GET /api/metrics`
+  - `GET /api/events?limit=40`
+  - `POST /api/tasks` (create)
+  - `POST /api/tasks/delete` (delete)
+  - `POST /api/tasks/run_due` (execute due tasks)
+
+Start web with built-in scheduler:
+
+```bash
+youagent serve --scheduler
+```
+
+### Observability
+
+- Event log: `.mini_worker/observability/events.jsonl`
+- Metrics: `.mini_worker/observability/metrics.json`
+- Runtime emits tool-step events (for progress tracking).
+
+### Security policy
+
+Create `.mini_worker/security.json` to override defaults:
+
+```json
+{
+  "allow_shell": true,
+  "blocked_shell_tokens": ["rm -rf /", "mkfs", "curl | sh"],
+  "blocked_hosts": ["localhost", "127.0.0.1", "169.254.169.254"],
+  "allowed_hosts": [],
+  "max_shell_timeout": 60,
+  "max_fetch_chars": 200000,
+  "max_playwright_chars": 120000
+}
+```
+
+### Playwright tool
+
+Tool name: `playwright_browse`
+
+- `action=content` : read visible text from page.
+- `action=screenshot` : save screenshot into workspace.
+
+Example prompt to agent:
+
+```text
+Use playwright_browse to open https://example.com and return main content.
+```
+
+For screenshot:
+
+```text
+Use playwright_browse with action=screenshot, url=https://example.com, path=artifacts/example.png
+```
+
+Note: Node.js + Playwright package must be installed for this tool.
