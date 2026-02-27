@@ -1,353 +1,209 @@
-# youagent
+# YouAgent
 
-一个类似 Manus / miniagent 风格的轻量项目：
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Version-0.1.0-orange?style=for-the-badge" alt="Version">
+</p>
 
-- 通过对话驱动 agent
-- agent 可以自动调用本地工具帮你完成任务
-- 支持两种风格：`manus_like`（更偏计划+分步）和 `miniagent_like`（更偏直接执行）
+> 🤖 A lightweight AI agent framework with tool-calling capabilities, similar to Manus/miniagent style. Build your own AI assistant that can execute tasks autonomously.
 
-## Features
+## ✨ Features
 
-- Tool-calling 对话循环（OpenAI-compatible Chat Completions）
-- 内置安全工具：
-  - `list_files`
-  - `read_file`
-  - `write_file`
-  - `run_shell`
-  - `find_files`
-  - `grep_text`
-  - `fetch_url`
-  - `read_json`
-  - `write_json`
-- 多 provider 配置：`openai` / `openrouter` / `minimax` / `custom`
-- 支持 `.env` 自动加载（无需每次手动 `export`）
-- 支持会话记忆持久化（多 session）
-- 基础安全限制：
-  - 工具默认限制在工作目录内
-  - shell 拒绝明显危险命令
-  - `fetch_url` 屏蔽高风险本地地址（如 `localhost`）
-- CLI 交互式聊天
+- **🤝 Tool-Calling Agent** - Autonomous AI agent that calls tools to complete tasks
+- **🛠️ Built-in Tools** - File operations, shell execution, web fetching, JSON handling
+- **🌐 Web UI** - Modern chat interface with real-time streaming
+- **💬 Multi-Agent Support** - Choose between `manus_like` (planning) or `miniagent_like` (direct execution)
+- **🔌 Multi-Provider** - OpenAI, OpenRouter, MiniMax, Anthropic, DeepSeek, Gemini, Grok, and more
+- **💾 Memory Persistence** - Session-based conversation memory
+- **🔒 Security First** - Sandboxed tool execution with configurable policies
+- **📅 Scheduler** - Automated task scheduling and execution
+- **📊 Observability** - Event logging and metrics tracking
+- **🎭 MCP Integration** - Model Context Protocol tool mounting
 
-## Quick Start
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
-cd /Users/ember/Desktop/youagent
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/EmberRavager/youagent.git
+cd youagent
 pip install -e .
 ```
 
-创建 `.env`（推荐）：
+### Configuration
+
+Create `.env` file:
 
 ```bash
-cat > .env <<'EOF'
-MINIMAX_API_KEY="your_minimax_key"
-# 可选覆盖（默认已内置）
-# MINIMAX_BASE_URL="https://api.minimaxi.com/v1"
-EOF
-```
-
-## 模型和 Key 配置
-
-- `model` 配置：通过 `--model` 或环境变量脚本参数（如 `MW_MODEL`）设置。
-- `key` 配置优先级：`--api-key` > provider 专属环境变量 > `OPENAI_API_KEY`。
-- `minimax` 推荐：
-
-```bash
-export MINIMAX_API_KEY="your_minimax_key"
-youagent serve --provider minimax --model MiniMax-M2.5
-```
-
-- 也可写入项目根目录 `.env`：
-
-```bash
-MINIMAX_API_KEY="your_minimax_key"
+# MiniMax Example
+MINIMAX_API_KEY="your_api_key"
 MINIMAX_BASE_URL="https://api.minimaxi.com/v1"
+
+# Or OpenAI
+OPENAI_API_KEY="sk-..."
+OPENAI_BASE_URL="https://api.openai.com/v1"
 ```
 
-## Web 客户端
-
-启动：
+### Start Web UI
 
 ```bash
-./start-web.sh
+docker run -d -p 8000:7788 -v $(pwd)/workspace:/workspace youagent
+# Open http://localhost:8000
 ```
 
-打开：`http://127.0.0.1:7788`
-
-页面支持直接配置：
-
-- `provider`（`openai/openrouter/minimax/custom`）
-- `model`
-- `base_url`
-- `api_key`（可留空，优先使用 `.env`）
-
-点击“应用模型配置”后立即生效。
-
-或直接设置环境变量（OpenAI-compatible API）：
+Or without Docker:
 
 ```bash
-export OPENAI_API_KEY="your_key"
-# 可选：兼容网关
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+youagent serve --host 0.0.0.0 --port 7788
 ```
 
-## One-Click Start
-
-项目根目录提供 `start.sh`，会自动：
-
-- 创建虚拟环境（若不存在）
-- 安装项目（editable）
-- 启动 `youagent chat`
-
-直接启动：
+### CLI Chat
 
 ```bash
-./start.sh
-```
-
-可通过环境变量覆盖默认参数：
-
-```bash
-MW_AGENT=manus_like MW_PROVIDER=minimax MW_MODEL=MiniMax-M2.5 MW_SESSION=project_a ./start.sh
-```
-
-启动聊天（OpenAI）：
-
-```bash
-youagent chat --agent manus_like --provider openai --model gpt-4.1-mini
-```
-
-Minimax（OpenAI 兼容模式）：
-
-```bash
-export MINIMAX_API_KEY="your_minimax_key"
 youagent chat --agent miniagent_like --provider minimax --model MiniMax-M2.5
 ```
 
-> 提示：`minimax` provider 下，`minmax` / `minimax2.5` / `m2.5` 会自动映射到 `MiniMax-M2.5`。
+## 📖 Usage Examples
 
-OpenRouter：
+### Example 1: List Files and Read Content
 
-```bash
-export OPENROUTER_API_KEY="your_openrouter_key"
-youagent chat --agent miniagent_like --provider openrouter --model openai/gpt-4.1-mini
+```
+User: "List current directory files and read README.md"
+Agent: [automatically calls list_files → read_file]
+→ Returns formatted results
 ```
 
-自定义网关（任何 OpenAI-compatible API）：
+### Example 2: Web Research
 
-```bash
-youagent chat --agent miniagent_like --provider custom --base-url https://your-gateway/v1 --api-key your_key --model your_model
+```
+User: "Search for latest AI news and save to news.json"
+Agent: [calls fetch_url → writes JSON]
+→ Saves research results
 ```
 
-输入 `exit` 或 `quit` 退出。
+### Example 3: Code Tasks
 
-## CLI Options
+```
+User: "Find all TODO comments in src/ and summarize"
+Agent: [calls grep_text → analyzes results]
+→ Returns summary
+```
+
+## 🛠️ Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_files` | List directory contents |
+| `read_file` | Read text files (with size limit) |
+| `write_file` | Write/create files |
+| `run_shell` | Execute shell commands |
+| `find_files` | Glob pattern file search |
+| `grep_text` | Regex text search |
+| `fetch_url` | Fetch web page content |
+| `read_json` / `write_json` | JSON operations |
+
+## 🏗️ Architecture
+
+```
+src/mini_worker/
+├── agents.py       # Agent profiles & prompts
+├── cli.py          # CLI entry point
+├── llm.py          # LLM client (OpenAI-compatible)
+├── runtime.py      # Tool-calling loop
+├── server.py       # Web server & APIs
+├── tools.py        # Tool implementations
+├── memory.py       # Session memory
+├── tasking.py      # Task scheduler
+└── observability.py # Logging & metrics
+```
+
+## 🔧 Configuration Options
 
 ```bash
-youagent chat \
+youagent serve \
   --agent miniagent_like \
   --provider minimax \
   --model MiniMax-M2.5 \
-  --workspace . \
-  --session default
+  --workspace /path/to/workdir \
+  --session my_project \
+  --timeout 60 \
+  --scheduler
 ```
 
-常用参数：
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--agent` | Agent type: `manus_like` or `miniagent_like` | `miniagent_like` |
+| `--provider` | LLM provider | `minimax` |
+| `--model` | Model name | `MiniMax-M2.5` |
+| `--workspace` | Working directory | `.` |
+| `--session` | Session ID for memory | `default` |
+| `--timeout` | LLM request timeout (seconds) | `60` |
+| `--scheduler` | Enable task scheduler | `false` |
+| `--mcp-config` | MCP server config path | - |
 
-- `--agent`: `manus_like` 或 `miniagent_like`
-- `--provider`: `openai` / `openrouter` / `minimax` / `custom`
-- `--model`: 模型 ID
-- `--api-key`: 直接传 key（会覆盖 env）
-- `--base-url`: 自定义兼容网关地址
-- `--timeout`: LLM 请求超时秒数
-- `--workspace`: 工具可访问的工作目录
-- `--session`: 会话 ID（用于持久记忆）
-- `--no-memory`: 关闭记忆
+## 🌐 Supported Providers
 
-## Memory
+- OpenAI / OpenAI Compatible
+- MiniMax
+- Anthropic
+- DeepSeek
+- Gemini
+- Grok
+- OpenRouter
+- Custom (any OpenAI-compatible API)
 
-- 默认开启会话记忆，保存在 `./.mini_worker/sessions/<session>.json`
-- 使用 `--session <name>` 切换会话上下文
-- 使用 `--no-memory` 关闭持久记忆
+## 🔐 Security
 
-示例：
+- Sandboxed file operations (workspace boundary)
+- Shell command filtering
+- URL fetch restrictions
+- Configurable security policies via `.mini_worker/security.json`
+
+## 📊 Observability
 
 ```bash
-youagent chat --agent manus_like --provider minimax --model MiniMax-M2.5 --session project_a
+# View events
+curl http://localhost:7788/api/events?limit=40
+
+# View metrics
+curl http://localhost:7788/api/metrics
 ```
 
-## Tools
+Events are logged to `.mini_worker/observability/events.jsonl`
 
-- `list_files(path)`: 列出目录或文件
-- `read_file(path, max_chars?)`: 读取文本文件
-- `write_file(path, content, append?)`: 写入文本文件
-- `run_shell(command, timeout?)`: 在工作目录执行 shell
-- `find_files(path?, pattern, limit?)`: 按 glob 模式查找文件
-- `grep_text(path?, pattern, include?, limit?)`: 正则搜索文本
-- `fetch_url(url, timeout?, max_chars?)`: 抓取网页内容
-- `read_json(path)`: 读取 JSON
-- `write_json(path, data, indent?)`: 写入 JSON
-
-## Example Dialog
-
-用户：
-
-```text
-帮我列出当前目录，并读取 README.md 前 40 行
-```
-
-agent 会自动触发 `list_files` 和 `read_file`，然后汇总结果回复。
-
-再比如：
-
-```text
-去联网查一下 MiniMax 文本模型列表，并保存到 models.json
-```
-
-agent 可能会组合调用 `fetch_url` + `write_json` 完成任务。
-
-## Project Layout
-
-```text
-src/mini_worker/
-  agents.py      # agent 角色与系统提示词
-  cli.py         # CLI 入口
-  llm.py         # OpenAI-compatible 客户端
-  runtime.py     # 对话循环与工具调度
-  tools.py       # 工具实现与安全策略
-```
-
-## Notes
-
-- 这是一个“类似风格”的实用骨架，不是对 Manus 或 miniagent 的源码复刻。
-- 你可以在 `src/mini_worker/tools.py` 继续扩展数据库、HTTP、GitHub、部署等工具。
-
-## 联系方式
-
-- 在杭州，有想招作者进去的联系邮箱：`emberravager@gmail.com`
-
-## MCP Integration
-
-You can mount MCP tools (stdio servers) with `--mcp-config`.
-
-Example `mcp.json`:
-
-```json
-{
-  "servers": [
-    {
-      "name": "filesystem",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "cwd": ".",
-      "startup_timeout": 15,
-      "request_timeout": 60
-    }
-  ]
-}
-```
-
-Run:
+## 📅 Scheduler
 
 ```bash
-youagent chat --mcp-config ./mcp.json
-youagent serve --mcp-config ./mcp.json
-youagent heartbeat --mcp-config ./mcp.json --message "scan repo and summarize TODOs" --every 300 --count 1
-```
+# Add scheduled task
+youagent tasks add --name daily_report --prompt "Check repo status" --every 600
 
-Persist defaults:
-
-```bash
-youagent config --mcp-config ./mcp.json
-youagent status
-```
-
-## Scheduler, Progress, Observability, Security, Playwright
-
-### Scheduled tasks
-
-Add task:
-
-```bash
-youagent tasks add \
-  --name daily_report \
-  --prompt "Check repo status and summarize TODOs" \
-  --every 600 \
-  --provider openai \
-  --model gpt-4.1-mini
-```
-
-List/Delete:
-
-```bash
+# List tasks
 youagent tasks list
-youagent tasks delete --id <task_id>
-```
 
-Run due tasks once / start loop:
-
-```bash
+# Run once
 youagent tasks run
-youagent tasks start --poll 5
 ```
 
-### Task progress visualization
+## 🤝 Contributing
 
-- Web dashboard: `http://127.0.0.1:7788/tasks.html`
-- APIs:
-  - `GET /api/tasks`
-  - `GET /api/metrics`
-  - `GET /api/events?limit=40`
-  - `POST /api/tasks` (create)
-  - `POST /api/tasks/delete` (delete)
-  - `POST /api/tasks/run_due` (execute due tasks)
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-Start web with built-in scheduler:
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-```bash
-youagent serve --scheduler
-```
+## 📝 License
 
-### Observability
+MIT License - see [LICENSE](LICENSE) for details.
 
-- Event log: `.mini_worker/observability/events.jsonl`
-- Metrics: `.mini_worker/observability/metrics.json`
-- Runtime emits tool-step events (for progress tracking).
+## 🔗 Links
 
-### Security policy
+- [GitHub Repository](https://github.com/EmberRavager/youagent)
+- [Report Issues](https://github.com/EmberRavager/youagent/issues)
 
-Create `.mini_worker/security.json` to override defaults:
+---
 
-```json
-{
-  "allow_shell": true,
-  "blocked_shell_tokens": ["rm -rf /", "mkfs", "curl | sh"],
-  "blocked_hosts": ["localhost", "127.0.0.1", "169.254.169.254"],
-  "allowed_hosts": [],
-  "max_shell_timeout": 60,
-  "max_fetch_chars": 200000,
-  "max_playwright_chars": 120000
-}
-```
-
-### Playwright tool
-
-Tool name: `playwright_browse`
-
-- `action=content` : read visible text from page.
-- `action=screenshot` : save screenshot into workspace.
-
-Example prompt to agent:
-
-```text
-Use playwright_browse to open https://example.com and return main content.
-```
-
-For screenshot:
-
-```text
-Use playwright_browse with action=screenshot, url=https://example.com, path=artifacts/example.png
-```
-
-Note: Node.js + Playwright package must be installed for this tool.
+<p align="center">Made with ❤️ by <a href="mailto:emberravager@gmail.com">EmberRavager</a></p>
