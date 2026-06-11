@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "youagent"
 version = "0.1.0"
-description = "Local-first coding agent harness with tool calling and traceable execution"
+description = "Local-first computer agent harness with tool calling, model switching, trace and undo"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -20,6 +20,7 @@ dependencies = []
 
 [project.scripts]
 youagent = "mini_worker.cli:main"
+youagent-local = "mini_worker.code_cli:main"
 youagent-code = "mini_worker.code_cli:main"
 
 [project.urls]
