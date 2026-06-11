@@ -10,7 +10,6 @@ from .cli import main as classic_main
 from .code_cli import (
     MODEL_EXAMPLES,
     _slug,
-    _snapshot_dirs,
     _youagent_dir,
     create_snapshot,
     finalize_snapshot,
@@ -26,24 +25,33 @@ from .settings import SettingsStore
 from .tools import ToolRegistry
 
 
+BASE_SYSTEM_PROMPT = (
+    "You are YouAgent, a local-first computer agent. "
+    "You help users inspect folders, organize files, run safe shell commands, "
+    "fetch web content, automate browser tasks, and manage local workflows. "
+    "Use tools when needed, but avoid risky or destructive actions unless the user explicitly asks. "
+    "Prefer reversible operations, explain what you did, and mention risks. "
+    "For file deletion, system changes, package installation, or commands with external side effects, "
+    "ask for confirmation or provide a safe plan first. "
+    "Keep answers concise and practical."
+)
+
+AGENT_INSTRUCTION_FILES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".github/copilot-instructions.md",
+)
+AGENT_INSTRUCTIONS_MAX_CHARS = 20_000
+
 LOCAL_AGENT = AgentProfile(
     name="youagent_local",
-    system_prompt=(
-        "You are YouAgent, a local-first computer agent. "
-        "You help users inspect folders, organize files, run safe shell commands, "
-        "fetch web content, automate browser tasks, and manage local workflows. "
-        "Use tools when needed, but avoid risky or destructive actions unless the user explicitly asks. "
-        "Prefer reversible operations, explain what you did, and mention risks. "
-        "For file deletion, system changes, package installation, or commands with external side effects, "
-        "ask for confirmation or provide a safe plan first. "
-        "Keep answers concise and practical."
-    ),
+    system_prompt=BASE_SYSTEM_PROMPT,
     max_tool_rounds=10,
 )
 
 
 LEGACY_COMMANDS = {"chat", "serve", "status", "config", "heartbeat", "tasks"}
-ONE_SHOT_COMMANDS = {"ask", "init", "trace", "undo", "model"}
+ONE_SHOT_COMMANDS = {"ask", "trace", "undo", "model"}
 
 
 def _print_help() -> None:
@@ -53,6 +61,7 @@ def _print_help() -> None:
 Usage:
   youagent                         Start interactive chat
   youagent <task>                  Run one-shot task
+  youagent init                    Create AGENTS.md for this workspace
   youagent model status            Show current model
   youagent model list              List provider presets
   youagent model set <provider> <model>
@@ -63,6 +72,7 @@ Usage:
 
 Slash commands in interactive mode:
   /help
+  /init
   /model
   /model list
   /model set <provider> <model>
@@ -70,6 +80,173 @@ Slash commands in interactive mode:
   /trace
   /exit
 """.strip()
+    )
+
+
+def _root_entries(workspace: str, limit: int = 80) -> list[str]:
+    root = Path(workspace).resolve()
+    ignored = {
+        ".git",
+        ".idea",
+        ".vscode",
+        ".venv",
+        "venv",
+        "env",
+        "node_modules",
+        "dist",
+        "build",
+        "target",
+        "__pycache__",
+        ".next",
+        ".nuxt",
+        ".turbo",
+        ".cache",
+        ".mini_worker",
+        ".youagent",
+    }
+    entries: list[str] = []
+    try:
+        for item in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+            if item.name in ignored:
+                continue
+            suffix = "/" if item.is_dir() else ""
+            entries.append(f"{item.name}{suffix}")
+            if len(entries) >= limit:
+                break
+    except OSError:
+        return []
+    return entries
+
+
+def _detected_workspace_notes(workspace: str) -> list[str]:
+    root = Path(workspace).resolve()
+    notes: list[str] = []
+    if (root / "package.json").exists():
+        notes.append("- JavaScript/TypeScript project detected from `package.json`.")
+    if (root / "pyproject.toml").exists():
+        notes.append("- Python project detected from `pyproject.toml`.")
+    if (root / "requirements.txt").exists():
+        notes.append("- Python dependencies detected from `requirements.txt`.")
+    if (root / "pom.xml").exists():
+        notes.append("- Maven project detected from `pom.xml`.")
+    if (root / "build.gradle").exists() or (root / "build.gradle.kts").exists():
+        notes.append("- Gradle project detected.")
+    if (root / "Dockerfile").exists():
+        notes.append("- Dockerfile detected.")
+    if not notes:
+        notes.append("- General local workspace. Inspect files before making assumptions.")
+    return notes
+
+
+def _default_agents_md(workspace: str) -> str:
+    root = Path(workspace).resolve()
+    entries = _root_entries(workspace)
+    entries_block = "\n".join(f"- `{entry}`" for entry in entries) or "- No root entries listed."
+    notes_block = "\n".join(_detected_workspace_notes(workspace))
+    return f"""# AGENTS.md
+
+Instructions for AI agents working in this workspace.
+
+## Workspace
+
+- Name: `{root.name}`
+- Path: `{root}`
+
+## Product / task intent
+
+Use this workspace as a local-first working area. You may inspect files, summarize content, organize information, run safe commands, and help with local workflows.
+
+If this is a code project, first understand the project structure before suggesting changes. If this is a normal folder, treat it as a local computer workspace and avoid assuming it is a repository.
+
+## Detected notes
+
+{notes_block}
+
+## Root entries
+
+{entries_block}
+
+## Operating rules
+
+1. Inspect before acting. Read relevant files or list folders before making claims.
+2. Prefer safe, reversible actions.
+3. Do not delete, move, overwrite, install packages, change system settings, or run risky shell commands without explicit user confirmation.
+4. For file organization tasks, first produce a preview plan, then ask for confirmation before applying changes.
+5. Keep changes inside the current workspace unless the user explicitly gives another path.
+6. Explain important tool use, risks, and suggested verification steps.
+7. When changing files, keep the change minimal and easy to undo.
+
+## Useful commands
+
+Add project-specific commands here, for example:
+
+```bash
+# run tests
+# npm test
+# pytest
+
+# lint / typecheck
+# npm run lint
+# npm run typecheck
+```
+
+## Notes for future agents
+
+- Update this file when you learn stable project rules, workflows, or user preferences.
+- Do not store secrets, API keys, tokens, or private credentials in this file.
+"""
+
+
+def _write_agents_md(workspace: str, force: bool = False) -> Path | None:
+    path = Path(workspace).resolve() / "AGENTS.md"
+    if path.exists() and not force:
+        return None
+    path.write_text(_default_agents_md(workspace), encoding="utf-8")
+    return path
+
+
+def _find_agent_instructions(workspace: str) -> Path | None:
+    root = Path(workspace).resolve()
+    for rel in AGENT_INSTRUCTION_FILES:
+        candidate = root / rel
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_agent_instructions(workspace: str) -> tuple[str | None, str]:
+    path = _find_agent_instructions(workspace)
+    if path is None:
+        return None, ""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    content = content.strip()
+    if len(content) > AGENT_INSTRUCTIONS_MAX_CHARS:
+        content = content[:AGENT_INSTRUCTIONS_MAX_CHARS] + "\n\n[truncated]"
+    return str(path), content
+
+
+def _agent_for_workspace(workspace: str) -> tuple[AgentProfile, str | None]:
+    instruction_path, instructions = _load_agent_instructions(workspace)
+    prompt = BASE_SYSTEM_PROMPT
+    if instructions:
+        prompt = (
+            f"{BASE_SYSTEM_PROMPT}\n\n"
+            "Workspace instructions loaded from agent-readable documentation. "
+            "Follow these instructions when they do not conflict with the user request or safety rules.\n\n"
+            f"--- BEGIN WORKSPACE INSTRUCTIONS ({instruction_path}) ---\n"
+            f"{instructions}\n"
+            "--- END WORKSPACE INSTRUCTIONS ---"
+        )
+    return (
+        AgentProfile(
+            name="youagent_local",
+            system_prompt=prompt,
+            max_tool_rounds=LOCAL_AGENT.max_tool_rounds,
+        ),
+        instruction_path,
     )
 
 
@@ -182,6 +359,18 @@ def _run_undo_last(workspace: str) -> None:
     run_undo(Args(workspace))
 
 
+def _run_init(workspace: str, force: bool = False) -> int:
+    path = _write_agents_md(workspace, force=force)
+    if path is None:
+        existing = Path(workspace).resolve() / "AGENTS.md"
+        print(f"AGENTS.md already exists: {existing}")
+        print("Use `youagent init --force` to overwrite it.")
+        return 0
+    print(f"Created {path}")
+    print("YouAgent will load this file automatically on the next request/session.")
+    return 0
+
+
 def _handle_slash_command(text: str, workspace: str) -> bool:
     parts = text.strip().split()
     command = parts[0].lower() if parts else ""
@@ -190,6 +379,10 @@ def _handle_slash_command(text: str, workspace: str) -> bool:
         raise KeyboardInterrupt
     if command == "/help":
         _print_help()
+        return True
+    if command == "/init":
+        force = "--force" in parts
+        _run_init(workspace, force=force)
         return True
     if command == "/model":
         if len(parts) == 1 or parts[1] == "status":
@@ -212,7 +405,7 @@ def _handle_slash_command(text: str, workspace: str) -> bool:
     return False
 
 
-def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str]:
+def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str, str | None]:
     settings = SettingsStore(workspace).load()
     load_dotenv(workspace)
     api_key = settings.api_keys.get(settings.provider)
@@ -227,14 +420,15 @@ def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str]:
     mcp_runtime = MCPRuntime(workspace=workspace, config_path=settings.mcp_config)
     mcp_runtime.mount(tools)
     memory = None if settings.no_memory else SessionMemory(workspace=workspace, session_id=settings.session)
-    runtime = AgentRuntime(agent=LOCAL_AGENT, client=client, tools=tools, memory=memory)
-    return runtime, mcp_runtime, client.cfg.provider, client.cfg.model
+    agent, instruction_path = _agent_for_workspace(workspace)
+    runtime = AgentRuntime(agent=agent, client=client, tools=tools, memory=memory)
+    return runtime, mcp_runtime, client.cfg.provider, client.cfg.model, instruction_path
 
 
 def interactive_chat(workspace: str) -> int:
     workspace = str(Path(workspace).resolve())
     try:
-        runtime, mcp_runtime, provider, model = _build_runtime(workspace)
+        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
     except Exception as exc:  # noqa: BLE001
         print(f"failed to start YouAgent: {type(exc).__name__}: {exc}")
         print("Configure a model with: youagent model set <provider> <model>")
@@ -242,6 +436,10 @@ def interactive_chat(workspace: str) -> int:
 
     try:
         print(f"YouAgent ready | provider={provider} model={model} workspace={workspace}")
+        if instruction_path:
+            print(f"Loaded instructions: {instruction_path}")
+        else:
+            print("No AGENTS.md found. Run /init to create one.")
         print("Type /help for commands, /exit to quit.")
         while True:
             try:
@@ -253,6 +451,10 @@ def interactive_chat(workspace: str) -> int:
                 continue
             try:
                 if user_text.startswith("/") and _handle_slash_command(user_text, workspace):
+                    if user_text.startswith("/init"):
+                        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
+                        if instruction_path:
+                            print(f"Reloaded instructions: {instruction_path}")
                     continue
             except KeyboardInterrupt:
                 print()
@@ -290,7 +492,7 @@ def interactive_chat(workspace: str) -> int:
 def one_shot(task: str, workspace: str) -> int:
     workspace = str(Path(workspace).resolve())
     try:
-        runtime, mcp_runtime, provider, model = _build_runtime(workspace)
+        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
     except Exception as exc:  # noqa: BLE001
         print(f"failed to start YouAgent: {type(exc).__name__}: {exc}")
         return 1
@@ -298,6 +500,8 @@ def one_shot(task: str, workspace: str) -> int:
     events: list[dict[str, Any]] = []
     snapshot_dir = create_snapshot(workspace, task)
     try:
+        if instruction_path:
+            print(f"[instructions] {instruction_path}")
         reply = runtime.ask(task, event_callback=lambda evt: events.append(dict(evt)))
         print(reply)
         undo_path = finalize_snapshot(workspace, snapshot_dir)
@@ -331,6 +535,9 @@ def main() -> int:
 
     if argv[0] in LEGACY_COMMANDS:
         return classic_main()
+
+    if argv[0] == "init":
+        return _run_init(workspace, force="--force" in argv)
 
     if argv[0] == "model":
         if len(argv) == 1 or argv[1] == "status":
