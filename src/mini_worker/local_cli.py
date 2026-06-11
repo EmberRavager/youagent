@@ -22,6 +22,7 @@ from .mcp import MCPRuntime
 from .memory import SessionMemory
 from .runtime import AgentRuntime
 from .settings import SettingsStore
+from .skills import SkillRegistry
 from .tools import ToolRegistry
 
 
@@ -33,6 +34,7 @@ BASE_SYSTEM_PROMPT = (
     "Prefer reversible operations, explain what you did, and mention risks. "
     "For file deletion, system changes, package installation, or commands with external side effects, "
     "ask for confirmation or provide a safe plan first. "
+    "When a workspace skill matches the task, follow that skill's steps and safety rules. "
     "Keep answers concise and practical."
 )
 
@@ -62,6 +64,9 @@ Usage:
   youagent                         Start interactive chat
   youagent <task>                  Run one-shot task
   youagent init                    Create AGENTS.md for this workspace
+  youagent skills init             Create default skills in .youagent/skills
+  youagent skills list             List workspace skills
+  youagent skill <name> [args...]  Run a specific workspace skill
   youagent model status            Show current model
   youagent model list              List provider presets
   youagent model set <provider> <model>
@@ -73,6 +78,9 @@ Usage:
 Slash commands in interactive mode:
   /help
   /init
+  /skills
+  /skills init
+  /skill <name> [args...]
   /model
   /model list
   /model set <provider> <model>
@@ -228,18 +236,24 @@ def _load_agent_instructions(workspace: str) -> tuple[str | None, str]:
     return str(path), content
 
 
-def _agent_for_workspace(workspace: str) -> tuple[AgentProfile, str | None]:
+def _agent_for_workspace(workspace: str) -> tuple[AgentProfile, str | None, str]:
     instruction_path, instructions = _load_agent_instructions(workspace)
-    prompt = BASE_SYSTEM_PROMPT
+    skills_prompt = SkillRegistry(workspace).catalog_prompt()
+    prompt_parts = [BASE_SYSTEM_PROMPT]
     if instructions:
-        prompt = (
-            f"{BASE_SYSTEM_PROMPT}\n\n"
+        prompt_parts.append(
             "Workspace instructions loaded from agent-readable documentation. "
             "Follow these instructions when they do not conflict with the user request or safety rules.\n\n"
             f"--- BEGIN WORKSPACE INSTRUCTIONS ({instruction_path}) ---\n"
             f"{instructions}\n"
             "--- END WORKSPACE INSTRUCTIONS ---"
         )
+    if skills_prompt:
+        prompt_parts.append(
+            "Workspace skills are reusable task playbooks. Prefer them when the user task matches.\n\n"
+            f"--- BEGIN WORKSPACE SKILLS ---\n{skills_prompt}\n--- END WORKSPACE SKILLS ---"
+        )
+    prompt = "\n\n".join(prompt_parts)
     return (
         AgentProfile(
             name="youagent_local",
@@ -247,6 +261,7 @@ def _agent_for_workspace(workspace: str) -> tuple[AgentProfile, str | None]:
             max_tool_rounds=LOCAL_AGENT.max_tool_rounds,
         ),
         instruction_path,
+        skills_prompt,
     )
 
 
@@ -371,6 +386,43 @@ def _run_init(workspace: str, force: bool = False) -> int:
     return 0
 
 
+def _run_skills(workspace: str, args: list[str]) -> int:
+    registry = SkillRegistry(workspace)
+    command = args[0] if args else "list"
+    if command == "init":
+        written = registry.ensure_defaults(overwrite="--force" in args)
+        if not written:
+            print(f"Skills already exist in {registry.skills_dir}")
+            print("Use `youagent skills init --force` to overwrite defaults.")
+            return 0
+        print(f"Created {len(written)} skill(s) in {registry.skills_dir}")
+        for path in written:
+            print(f"- {path.name}")
+        return 0
+    if command in {"list", "ls"}:
+        skills = registry.list_skills()
+        if not skills:
+            print("No skills found. Run: youagent skills init")
+            return 0
+        for skill in skills:
+            rel = skill.path.relative_to(Path(workspace).resolve())
+            desc = f" - {skill.description}" if skill.description else ""
+            print(f"- {skill.name} ({rel}){desc}")
+        return 0
+    print("Usage: youagent skills init|list")
+    return 1
+
+
+def _skill_task_prompt(workspace: str, skill_name: str, user_args: str) -> str | None:
+    registry = SkillRegistry(workspace)
+    skill = registry.get(skill_name)
+    if skill is None:
+        print(f"Skill not found: {skill_name}")
+        print("Run `youagent skills list` to see available skills.")
+        return None
+    return registry.render_task_prompt(skill, user_args)
+
+
 def _handle_slash_command(text: str, workspace: str) -> bool:
     parts = text.strip().split()
     command = parts[0].lower() if parts else ""
@@ -383,6 +435,9 @@ def _handle_slash_command(text: str, workspace: str) -> bool:
     if command == "/init":
         force = "--force" in parts
         _run_init(workspace, force=force)
+        return True
+    if command == "/skills":
+        _run_skills(workspace, parts[1:])
         return True
     if command == "/model":
         if len(parts) == 1 or parts[1] == "status":
@@ -405,7 +460,7 @@ def _handle_slash_command(text: str, workspace: str) -> bool:
     return False
 
 
-def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str, str | None]:
+def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str, str | None, str]:
     settings = SettingsStore(workspace).load()
     load_dotenv(workspace)
     api_key = settings.api_keys.get(settings.provider)
@@ -420,15 +475,25 @@ def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str, 
     mcp_runtime = MCPRuntime(workspace=workspace, config_path=settings.mcp_config)
     mcp_runtime.mount(tools)
     memory = None if settings.no_memory else SessionMemory(workspace=workspace, session_id=settings.session)
-    agent, instruction_path = _agent_for_workspace(workspace)
+    agent, instruction_path, skills_prompt = _agent_for_workspace(workspace)
     runtime = AgentRuntime(agent=agent, client=client, tools=tools, memory=memory)
-    return runtime, mcp_runtime, client.cfg.provider, client.cfg.model, instruction_path
+    return runtime, mcp_runtime, client.cfg.provider, client.cfg.model, instruction_path, skills_prompt
+
+
+def _prepare_user_text(workspace: str, user_text: str) -> str | None:
+    parts = user_text.strip().split(maxsplit=2)
+    if not parts or parts[0] != "/skill":
+        return user_text
+    if len(parts) < 2:
+        print("Usage: /skill <name> [args...]")
+        return None
+    return _skill_task_prompt(workspace, parts[1], parts[2] if len(parts) > 2 else "")
 
 
 def interactive_chat(workspace: str) -> int:
     workspace = str(Path(workspace).resolve())
     try:
-        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
+        runtime, mcp_runtime, provider, model, instruction_path, skills_prompt = _build_runtime(workspace)
     except Exception as exc:  # noqa: BLE001
         print(f"failed to start YouAgent: {type(exc).__name__}: {exc}")
         print("Configure a model with: youagent model set <provider> <model>")
@@ -440,6 +505,10 @@ def interactive_chat(workspace: str) -> int:
             print(f"Loaded instructions: {instruction_path}")
         else:
             print("No AGENTS.md found. Run /init to create one.")
+        if skills_prompt:
+            print("Loaded workspace skills. Run /skills to list them.")
+        else:
+            print("No skills found. Run /skills init to create defaults.")
         print("Type /help for commands, /exit to quit.")
         while True:
             try:
@@ -451,20 +520,25 @@ def interactive_chat(workspace: str) -> int:
                 continue
             try:
                 if user_text.startswith("/") and _handle_slash_command(user_text, workspace):
-                    if user_text.startswith("/init"):
-                        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
+                    if user_text.startswith("/init") or user_text.startswith("/skills init"):
+                        runtime, mcp_runtime, provider, model, instruction_path, skills_prompt = _build_runtime(workspace)
                         if instruction_path:
                             print(f"Reloaded instructions: {instruction_path}")
+                        if skills_prompt:
+                            print("Reloaded workspace skills.")
                     continue
             except KeyboardInterrupt:
                 print()
                 return 0
 
+            prepared_text = _prepare_user_text(workspace, user_text)
+            if prepared_text is None:
+                continue
             events: list[dict[str, Any]] = []
             snapshot_dir = create_snapshot(workspace, user_text)
             try:
                 reply = runtime.ask(
-                    user_text,
+                    prepared_text,
                     event_callback=lambda evt: events.append(dict(evt)),
                 )
                 print(f"agent> {reply}")
@@ -492,17 +566,20 @@ def interactive_chat(workspace: str) -> int:
 def one_shot(task: str, workspace: str) -> int:
     workspace = str(Path(workspace).resolve())
     try:
-        runtime, mcp_runtime, provider, model, instruction_path = _build_runtime(workspace)
+        runtime, mcp_runtime, provider, model, instruction_path, skills_prompt = _build_runtime(workspace)
     except Exception as exc:  # noqa: BLE001
         print(f"failed to start YouAgent: {type(exc).__name__}: {exc}")
         return 1
 
+    prepared_task = _prepare_user_text(workspace, task) or task
     events: list[dict[str, Any]] = []
     snapshot_dir = create_snapshot(workspace, task)
     try:
         if instruction_path:
             print(f"[instructions] {instruction_path}")
-        reply = runtime.ask(task, event_callback=lambda evt: events.append(dict(evt)))
+        if skills_prompt:
+            print("[skills] loaded")
+        reply = runtime.ask(prepared_task, event_callback=lambda evt: events.append(dict(evt)))
         print(reply)
         undo_path = finalize_snapshot(workspace, snapshot_dir)
         undo = json.loads(undo_path.read_text(encoding="utf-8"))
@@ -538,6 +615,18 @@ def main() -> int:
 
     if argv[0] == "init":
         return _run_init(workspace, force="--force" in argv)
+
+    if argv[0] == "skills":
+        return _run_skills(workspace, argv[1:])
+
+    if argv[0] == "skill":
+        if len(argv) < 2:
+            print("Usage: youagent skill <name> [args...]")
+            return 1
+        prompt = _skill_task_prompt(workspace, argv[1], " ".join(argv[2:]))
+        if prompt is None:
+            return 1
+        return one_shot(prompt, workspace)
 
     if argv[0] == "model":
         if len(argv) == 1 or argv[1] == "status":
