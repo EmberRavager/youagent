@@ -16,6 +16,7 @@ from .code_cli import (
     run_undo,
 )
 from .config import PROVIDER_PRESETS, available_providers
+from .context import build_file_context, is_plan_request, should_create_snapshot, to_plan_prompt
 from .env import load_dotenv
 from .llm import ChatClient
 from .mcp import MCPRuntime
@@ -35,6 +36,7 @@ BASE_SYSTEM_PROMPT = (
     "For file deletion, system changes, package installation, or commands with external side effects, "
     "ask for confirmation or provide a safe plan first. "
     "When a workspace skill matches the task, follow that skill's steps and safety rules. "
+    "Do not read the whole repository unless necessary; prefer focused context, @file references, grep, and targeted reads. "
     "Keep answers concise and practical."
 )
 
@@ -67,6 +69,7 @@ Usage:
   youagent skills init             Create default skills in .youagent/skills
   youagent skills list             List workspace skills
   youagent skill <name> [args...]  Run a specific workspace skill
+  youagent plan <task>             Plan only; do not modify files
   youagent model status            Show current model
   youagent model list              List provider presets
   youagent model set <provider> <model>
@@ -75,12 +78,16 @@ Usage:
   youagent chat                    Use classic chat mode
   youagent serve                   Start Web UI
 
+Context:
+  Mention @path/to/file to inject focused file context with a budget.
+
 Slash commands in interactive mode:
   /help
   /init
   /skills
   /skills init
   /skill <name> [args...]
+  /plan <task>
   /model
   /model list
   /model set <provider> <model>
@@ -183,6 +190,7 @@ If this is a code project, first understand the project structure before suggest
 5. Keep changes inside the current workspace unless the user explicitly gives another path.
 6. Explain important tool use, risks, and suggested verification steps.
 7. When changing files, keep the change minimal and easy to undo.
+8. Do not read the whole repository by default. Use @file references, targeted search, and focused reads.
 
 ## Useful commands
 
@@ -272,6 +280,9 @@ def _write_trace(
     events: list[dict[str, Any]],
     reply: str,
     snapshot_path: Path | None,
+    referenced_files: list[str] | None = None,
+    skipped_refs: list[str] | None = None,
+    plan_mode: bool = False,
 ) -> Path:
     runs = _youagent_dir(workspace) / "runs"
     runs.mkdir(parents=True, exist_ok=True)
@@ -281,7 +292,12 @@ def _write_trace(
         "",
         f"- Time: {datetime.now().isoformat(timespec='seconds')}",
         f"- Workspace: `{Path(workspace).resolve()}`",
+        f"- Plan mode: `{str(plan_mode).lower()}`",
     ]
+    if referenced_files:
+        lines.append(f"- Referenced files: {', '.join(f'`{item}`' for item in referenced_files)}")
+    if skipped_refs:
+        lines.append(f"- Skipped references: {len(skipped_refs)}")
     if snapshot_path is not None:
         lines.append(f"- Undo snapshot: `{snapshot_path}`")
     lines.extend(["", "## Goal", "", prompt.strip(), "", "## Runtime Events", ""])
@@ -480,14 +496,32 @@ def _build_runtime(workspace: str) -> tuple[AgentRuntime, MCPRuntime, str, str, 
     return runtime, mcp_runtime, client.cfg.provider, client.cfg.model, instruction_path, skills_prompt
 
 
-def _prepare_user_text(workspace: str, user_text: str) -> str | None:
+def _prepare_user_text(workspace: str, user_text: str) -> tuple[str | None, list[str], list[str], bool]:
     parts = user_text.strip().split(maxsplit=2)
-    if not parts or parts[0] != "/skill":
-        return user_text
-    if len(parts) < 2:
-        print("Usage: /skill <name> [args...]")
-        return None
-    return _skill_task_prompt(workspace, parts[1], parts[2] if len(parts) > 2 else "")
+    prompt = user_text
+    if parts and parts[0] == "/skill":
+        if len(parts) < 2:
+            print("Usage: /skill <name> [args...]")
+            return None, [], [], False
+        prompt = _skill_task_prompt(workspace, parts[1], parts[2] if len(parts) > 2 else "")
+        if prompt is None:
+            return None, [], [], False
+    if is_plan_request(prompt):
+        prompt = to_plan_prompt(prompt)
+    context_block = build_file_context(workspace, prompt)
+    return context_block.prompt, context_block.referenced_files, context_block.skipped, is_plan_request(user_text)
+
+
+def _run_agent_task(runtime: AgentRuntime, workspace: str, user_text: str) -> tuple[str, list[dict[str, Any]], Path | None, list[str], list[str], bool]:
+    prepared_text, referenced_files, skipped_refs, plan_mode = _prepare_user_text(workspace, user_text)
+    if prepared_text is None:
+        return "", [], None, referenced_files, skipped_refs, plan_mode
+    events: list[dict[str, Any]] = []
+    snapshot_dir: Path | None = None
+    if should_create_snapshot(user_text, prepared_text):
+        snapshot_dir = create_snapshot(workspace, user_text)
+    reply = runtime.ask(prepared_text, event_callback=lambda evt: events.append(dict(evt)))
+    return reply, events, snapshot_dir, referenced_files, skipped_refs, plan_mode
 
 
 def interactive_chat(workspace: str) -> int:
@@ -519,7 +553,7 @@ def interactive_chat(workspace: str) -> int:
             if not user_text:
                 continue
             try:
-                if user_text.startswith("/") and _handle_slash_command(user_text, workspace):
+                if user_text.startswith("/") and not user_text.startswith("/skill") and not user_text.startswith("/plan") and _handle_slash_command(user_text, workspace):
                     if user_text.startswith("/init") or user_text.startswith("/skills init"):
                         runtime, mcp_runtime, provider, model, instruction_path, skills_prompt = _build_runtime(workspace)
                         if instruction_path:
@@ -531,32 +565,38 @@ def interactive_chat(workspace: str) -> int:
                 print()
                 return 0
 
-            prepared_text = _prepare_user_text(workspace, user_text)
-            if prepared_text is None:
-                continue
-            events: list[dict[str, Any]] = []
-            snapshot_dir = create_snapshot(workspace, user_text)
             try:
-                reply = runtime.ask(
-                    prepared_text,
-                    event_callback=lambda evt: events.append(dict(evt)),
-                )
+                reply, events, snapshot_dir, referenced_files, skipped_refs, plan_mode = _run_agent_task(runtime, workspace, user_text)
+                if not reply and not events:
+                    continue
                 print(f"agent> {reply}")
             except Exception as exc:  # noqa: BLE001
                 print(f"agent error: {type(exc).__name__}: {exc}")
                 reply = f"ERROR: {type(exc).__name__}: {exc}"
+                events = []
+                snapshot_dir = None
+                referenced_files = []
+                skipped_refs = []
+                plan_mode = is_plan_request(user_text)
             finally:
-                undo_path = finalize_snapshot(workspace, snapshot_dir)
-                undo = json.loads(undo_path.read_text(encoding="utf-8"))
-                changes = len(undo.get("changes", []))
+                changes = 0
+                if snapshot_dir is not None:
+                    undo_path = finalize_snapshot(workspace, snapshot_dir)
+                    undo = json.loads(undo_path.read_text(encoding="utf-8"))
+                    changes = len(undo.get("changes", []))
                 trace_path = _write_trace(
                     workspace=workspace,
                     prompt=user_text,
                     events=events,
                     reply=reply,
                     snapshot_path=snapshot_dir,
+                    referenced_files=referenced_files,
+                    skipped_refs=skipped_refs,
+                    plan_mode=plan_mode,
                 )
                 print(f"[trace] {trace_path}")
+                if referenced_files:
+                    print(f"[context] {len(referenced_files)} explicit file(s) loaded")
                 if changes:
                     print(f"[undo] {changes} change(s). Restore with: /undo")
     finally:
@@ -571,27 +611,31 @@ def one_shot(task: str, workspace: str) -> int:
         print(f"failed to start YouAgent: {type(exc).__name__}: {exc}")
         return 1
 
-    prepared_task = _prepare_user_text(workspace, task) or task
-    events: list[dict[str, Any]] = []
-    snapshot_dir = create_snapshot(workspace, task)
     try:
         if instruction_path:
             print(f"[instructions] {instruction_path}")
         if skills_prompt:
             print("[skills] loaded")
-        reply = runtime.ask(prepared_task, event_callback=lambda evt: events.append(dict(evt)))
+        reply, events, snapshot_dir, referenced_files, skipped_refs, plan_mode = _run_agent_task(runtime, workspace, task)
         print(reply)
-        undo_path = finalize_snapshot(workspace, snapshot_dir)
-        undo = json.loads(undo_path.read_text(encoding="utf-8"))
-        changes = len(undo.get("changes", []))
+        changes = 0
+        if snapshot_dir is not None:
+            undo_path = finalize_snapshot(workspace, snapshot_dir)
+            undo = json.loads(undo_path.read_text(encoding="utf-8"))
+            changes = len(undo.get("changes", []))
         trace_path = _write_trace(
             workspace=workspace,
             prompt=task,
             events=events,
             reply=reply,
             snapshot_path=snapshot_dir,
+            referenced_files=referenced_files,
+            skipped_refs=skipped_refs,
+            plan_mode=plan_mode,
         )
         print(f"\n[trace] {trace_path}")
+        if referenced_files:
+            print(f"[context] {len(referenced_files)} explicit file(s) loaded")
         if changes:
             print(f"[undo] {changes} change(s). Restore with: youagent undo last")
         return 0
@@ -627,6 +671,9 @@ def main() -> int:
         if prompt is None:
             return 1
         return one_shot(prompt, workspace)
+
+    if argv[0] == "plan":
+        return one_shot("/plan " + " ".join(argv[1:]), workspace)
 
     if argv[0] == "model":
         if len(argv) == 1 or argv[1] == "status":
