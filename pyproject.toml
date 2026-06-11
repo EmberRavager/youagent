@@ -19,9 +19,7 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-youagent = "mini_worker.cli:main"
-youagent-local = "mini_worker.code_cli:main"
-youagent-code = "mini_worker.code_cli:main"
+youagent = "mini_worker.local_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/EmberRavager/youagent"
