@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "youagent"
 version = "0.1.0"
-description = "Conversation-driven tool-using agent framework (YouAgent)"
+description = "Local-first coding agent harness with tool calling and traceable execution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -20,9 +20,10 @@ dependencies = []
 
 [project.scripts]
 youagent = "mini_worker.cli:main"
+youagent-code = "mini_worker.code_cli:main"
 
 [project.urls]
-Homepage = "https://github.com/youagent/youagent"
+Homepage = "https://github.com/EmberRavager/youagent"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
