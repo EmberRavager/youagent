@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import threading
 import time
@@ -178,66 +180,48 @@ def run_due_tasks(
     runner: Callable[[ScheduledTask, Callable[[dict[str, Any]], None]], tuple[bool, str]],
     *,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
-) -> int:
-    due_tasks = store.due()
-    executed = 0
-    for task in due_tasks:
-        executed += 1
-        store.update(
-            task.id,
-            status="running",
-            step_index=0,
-            step_total=1,
-            last_error=None,
-            last_reply=None,
-            last_run_at=int(time.time()),
-        )
-        if on_event:
-            on_event("task_started", {"task_id": task.id, "name": task.name})
-
-        def progress(evt: dict[str, Any]) -> None:
-            phase = str(evt.get("phase", ""))
-            if phase == "tool_start":
-                current = int(evt.get("tool_index", 0))
-                total = max(1, int(evt.get("tool_total", 1)))
-                store.update(task.id, step_index=current, step_total=total, status="running")
-            if on_event:
-                on_event("task_progress", {"task_id": task.id, **evt})
-
-        ok = False
-        detail = ""
-        try:
-            ok, detail = runner(task, progress)
-        except Exception as exc:  # noqa: BLE001
-            ok = False
-            detail = f"{type(exc).__name__}: {exc}"
-
-        now = int(time.time())
-        if ok:
+    stop_event: threading.Event | None = None,
+) -> None:
+    while stop_event is None or not stop_event.is_set():
+        for task in store.due():
+            task.status = "running"
+            task.step_index = 0
+            task.step_total = 1
+            task.last_run_at = int(time.time())
             store.update(
                 task.id,
-                status="idle",
-                step_index=1,
-                step_total=1,
-                last_reply=detail,
-                last_error=None,
-                runs=task.runs + 1,
-                next_run_at=now + max(10, task.interval_seconds),
-                last_run_at=now,
+                status=task.status,
+                step_index=task.step_index,
+                step_total=task.step_total,
+                last_run_at=task.last_run_at,
             )
             if on_event:
-                on_event("task_succeeded", {"task_id": task.id, "name": task.name})
-        else:
+                on_event(task.id, {"type": "task_start", "task": task.to_dict()})
+
+            def emit(payload: dict[str, Any], task_id: str = task.id) -> None:
+                if on_event:
+                    on_event(task_id, payload)
+
+            try:
+                ok, reply = runner(task, emit)
+                task.status = "idle" if ok else "error"
+                task.last_reply = reply if ok else None
+                task.last_error = None if ok else reply
+            except Exception as exc:  # noqa: BLE001
+                task.status = "error"
+                task.last_error = f"{type(exc).__name__}: {exc}"
+            task.runs += 1
+            task.next_run_at = int(time.time()) + task.interval_seconds
+            task.updated_at = int(time.time())
             store.update(
                 task.id,
-                status="error",
-                step_index=0,
-                step_total=1,
-                last_error=detail,
-                runs=task.runs + 1,
-                next_run_at=now + max(10, task.interval_seconds),
-                last_run_at=now,
+                status=task.status,
+                last_reply=task.last_reply,
+                last_error=task.last_error,
+                runs=task.runs,
+                next_run_at=task.next_run_at,
+                updated_at=task.updated_at,
             )
             if on_event:
-                on_event("task_failed", {"task_id": task.id, "name": task.name, "error": detail})
-    return executed
+                on_event(task.id, {"type": "task_end", "task": task.to_dict()})
+        time.sleep(1)
