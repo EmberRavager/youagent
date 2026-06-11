@@ -46,7 +46,7 @@ def extract_file_refs(text: str) -> list[str]:
     refs: list[str] = []
     seen: set[str] = set()
     for match in FILE_REF_PATTERN.finditer(text):
-        raw = match.group(1).strip().rstrip(".,;:)"])
+        raw = match.group(1).strip().rstrip(".,;:)]}")
         if not raw or raw.startswith(("http://", "https://")):
             continue
         normalized = raw.replace("\\", "/")
