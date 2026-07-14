@@ -16,13 +16,16 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
-dependencies = []
+dependencies = [
+    "psutil>=5.9,<8",
+]
 
 [project.scripts]
 youagent = "mini_worker.cli:main"
+youagent-guard = "youagent_guard.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/youagent/youagent"
+Homepage = "https://github.com/EmberRavager/youagent"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
