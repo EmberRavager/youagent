@@ -193,6 +193,20 @@ YouAgent Guard monitors AI-agent process trees for dangerous commands and potent
 
 > **MVP boundary:** this release observes newly started processes and can immediately alert or terminate them. It is not yet an Endpoint Security system extension and cannot guarantee pre-execution blocking or detect every file read.
 
+### macOS menu-bar app
+
+A SwiftUI menu-bar wrapper is available under `macos/`:
+
+```bash
+python3 -m pip install -e .
+cd macos
+chmod +x build_app.sh
+./build_app.sh
+open "dist/YouAgent Guard.app"
+```
+
+It can start/stop protection, switch between alert and termination modes, show recent events, and open the audit log. See [macos/README.md](macos/README.md).
+
 ### Watch running agents
 
 ```bash
