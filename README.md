@@ -187,6 +187,54 @@ youagent tasks list
 youagent tasks run
 ```
 
+## 🛡️ YouAgent Guard (macOS MVP)
+
+YouAgent Guard monitors AI-agent process trees for dangerous commands and potential credential exposure. It works with known agents such as Codex, Claude Code, Cursor, Aider, OpenCode, and user-defined agent processes.
+
+> **MVP boundary:** this release observes newly started processes and can immediately alert or terminate them. It is not yet an Endpoint Security system extension and cannot guarantee pre-execution blocking or detect every file read.
+
+### macOS menu-bar app
+
+A SwiftUI menu-bar wrapper is available under `macos/`:
+
+```bash
+python3 -m pip install -e .
+cd macos
+chmod +x build_app.sh
+./build_app.sh
+open "dist/YouAgent Guard.app"
+```
+
+It can start/stop protection, switch between alert and termination modes, show recent events, and open the audit log. See [macos/README.md](macos/README.md).
+
+### Watch running agents
+
+```bash
+# Alert only
+youagent-guard watch
+
+# Immediately stop newly detected high-risk processes
+youagent-guard watch --action terminate
+
+# Protect a custom agent process name or existing PID
+youagent-guard watch --agent my-agent --pid 12345 --action terminate
+```
+
+### Launch an agent in protected mode
+
+```bash
+youagent-guard run --action terminate -- codex
+youagent-guard run --action terminate -- python ./my_agent.py
+```
+
+Protected launch strips environment variables whose names look like API keys, tokens, secrets, passwords, private keys, or database credentials before the agent starts. Audit records are written to:
+
+```text
+~/.youagent-guard/audit.jsonl
+```
+
+Current detections include recursive deletion, destructive Git operations, privilege escalation, remote scripts piped to a shell, Docker/Kubernetes destructive commands, database destruction, protected credential paths, and secret-like values exposed in process arguments.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
